@@ -166,14 +166,31 @@ async function startAR() {
 
     console.log("Requesting AR session...");
 
-    // Request WebXR session with required features only
-    appState.xrSession = await navigator.xr.requestSession("immersive-ar", {
-      requiredFeatures: ["hit-test"],
-      optionalFeatures: ["anchors", "dom-overlay"],
-      domOverlay: { root: document.body },
-    });
+    // Request WebXR session with required features first; if that fails,
+    // try requesting a plain immersive-ar session (some runtimes don't support requested features)
+    let session = null;
+    try {
+      session = await navigator.xr.requestSession("immersive-ar", {
+        requiredFeatures: ["hit-test"],
+        optionalFeatures: ["anchors", "dom-overlay"],
+        domOverlay: { root: document.body },
+      });
+      console.log("✅ AR session started (with features)");
+    } catch (errReq) {
+      console.warn('requestSession with features failed:', errReq);
+      diagLog('requestSession with features failed: ' + errReq.message);
+      // Try requesting without features (fallback)
+      try {
+        session = await navigator.xr.requestSession('immersive-ar');
+        console.log('✅ AR session started (fallback without features)');
+        diagLog('AR session started (fallback without features)');
+      } catch (errFallback) {
+        console.error('Could not create AR session (even fallback):', errFallback);
+        throw errFallback;
+      }
+    }
 
-    console.log("✅ AR session started");
+    appState.xrSession = session;
 
     // Bind Three.js renderer to XR session
     appState.renderer.xr.setSession(appState.xrSession);
@@ -337,6 +354,45 @@ function onXRFrame(time, frame) {
   ) {
     placeModelOnPlane(hitTestResults[0], frame);
     appState.placeRequested = false;
+  }
+
+  // Fallback: if user requested placement but no hit test available,
+  // place the model a short distance in front of the viewer (best-effort)
+  if (
+    hitTestResults.length === 0 &&
+    appState.placeRequested &&
+    appState.productModel &&
+    appState.isPlacingMode
+  ) {
+    try {
+      const viewerPose = frame.getViewerPose(appState.referenceSpace);
+      if (viewerPose) {
+        const transform = viewerPose.transform;
+        // Compute a position 0.6m in front of the camera
+        const pos = new THREE.Vector3(0, 0, -0.6);
+        const orientation = new THREE.Quaternion(
+          transform.orientation.x,
+          transform.orientation.y,
+          transform.orientation.z,
+          transform.orientation.w
+        );
+        pos.applyQuaternion(orientation);
+        pos.add(new THREE.Vector3(transform.position.x, transform.position.y, transform.position.z));
+
+        // Place model
+        const modelClone = appState.productModel.clone();
+        modelClone.visible = true;
+        modelClone.position.copy(pos);
+        modelClone.quaternion.copy(orientation);
+        appState.scene.add(modelClone);
+        appState.isPlacingMode = false;
+        diagLog('Placed model using viewer-forward fallback');
+        appState.placeRequested = false;
+      }
+    } catch (e) {
+      console.warn('Viewer-forward placement failed', e);
+      diagLog('Viewer-forward placement failed: ' + e.message);
+    }
   }
 
   // Update tracked anchors (models already placed stay in position)
