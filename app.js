@@ -66,6 +66,9 @@ async function initScene() {
   // Load the 3D model
   await loadModel();
 
+  // Add a diagnostics overlay for mobile troubleshooting
+  createDiagnosticsOverlay();
+
   // Handle window resize
   window.addEventListener("resize", onWindowResize);
 }
@@ -408,6 +411,56 @@ function onWindowResize() {
   appState.camera.aspect = width / height;
   appState.camera.updateProjectionMatrix();
   appState.renderer.setSize(width, height);
+}
+
+// ============================================================================
+// Diagnostics Overlay (helps debug on mobile without remote console)
+// ============================================================================
+function createDiagnosticsOverlay() {
+  const diag = document.createElement('div');
+  diag.id = 'diagnostics';
+  diag.style.position = 'absolute';
+  diag.style.top = '8px';
+  diag.style.right = '8px';
+  diag.style.zIndex = '9999';
+  diag.style.padding = '8px 12px';
+  diag.style.background = 'rgba(0,0,0,0.6)';
+  diag.style.color = 'white';
+  diag.style.fontSize = '12px';
+  diag.style.borderRadius = '6px';
+  diag.style.maxWidth = '220px';
+  diag.style.lineHeight = '1.3';
+  diag.innerHTML = '<strong>Diagnostics</strong><br>Checking...';
+  document.body.appendChild(diag);
+
+  // Check basic capabilities
+  (async () => {
+    const parts = [];
+    parts.push(`<div style="word-break:break-word">UA: ${navigator.userAgent}</div>`);
+
+    if (navigator.xr && navigator.xr.isSessionSupported) {
+      try {
+        const supported = await navigator.xr.isSessionSupported('immersive-ar');
+        parts.push(`<div>immersive-ar: ${supported}</div>`);
+      } catch (e) {
+        parts.push(`<div>immersive-ar: error</div>`);
+      }
+    } else {
+      parts.push('<div>WebXR: not available</div>');
+    }
+
+    // camera permission state (may not be supported by all browsers)
+    if (navigator.permissions && navigator.permissions.query) {
+      try {
+        const p = await navigator.permissions.query({ name: 'camera' });
+        parts.push(`<div>camera perm: ${p.state}</div>`);
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    diag.innerHTML = '<strong>Diagnostics</strong><br>' + parts.join('');
+  })();
 }
 
 // ============================================================================
