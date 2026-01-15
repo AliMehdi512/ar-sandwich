@@ -215,7 +215,21 @@ async function startAR() {
 // ============================================================================
 function setupUIListeners() {
   // Screen tap to place model
-  appState.renderer.domElement.addEventListener("click", () => {
+  appState.renderer.domElement.addEventListener("click", async () => {
+    // If XR session isn't started yet, start it using this user gesture.
+    // Some users tap the scene instead of the 'View in AR' button.
+    if (!appState.xrSession) {
+      try {
+        await startAR();
+        // After starting, mark a placement request so this tap places the model.
+        appState.placeRequested = true;
+      } catch (e) {
+        console.warn('startAR failed from tap:', e);
+      }
+      return;
+    }
+
+    // Normal placing flow when session already running
     if (appState.isPlacingMode) {
       appState.placeRequested = true;
     }
