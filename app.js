@@ -22,6 +22,9 @@ const appState = {
   isPlacingMode: true, // Flag for placement mode
 };
 
+// Diagnostics element for mobile debugging
+let diagEl = null;
+
 // Gesture tracking for rotate and scale
 const gestureState = {
   touchStartDistance: 0,
@@ -182,11 +185,24 @@ async function startAR() {
 
     // Set up hit-testing: test against horizontal planes (tables)
     const viewerSpace = await appState.xrSession.requestReferenceSpace("viewer");
-    appState.hitTestSource = await appState.xrSession.requestHitTestSource({
-      space: viewerSpace,
-      entityTypes: ["plane"], // Only detect planes
-      offsetRay: new XRRay({ y: 0.5 }), // Point downward from camera
-    });
+    try {
+      appState.hitTestSource = await appState.xrSession.requestHitTestSource({
+        space: viewerSpace,
+        // Some runtimes support plane detection via entityTypes; try and fall back if unsupported
+        entityTypes: ["plane"],
+        offsetRay: new XRRay({ y: 0.5 }),
+      });
+    } catch (e) {
+      // Fallback: try requesting a basic hit test source without entityTypes/offsetRay
+      try {
+        appState.hitTestSource = await appState.xrSession.requestHitTestSource({ space: viewerSpace });
+        diagLog('Hit-test created (fallback)');
+      } catch (err) {
+        console.warn('Hit-test not available:', err);
+        diagLog('Hit-test not available');
+        appState.hitTestSource = null;
+      }
+    }
 
     console.log("✅ Hit-test source created");
 
@@ -204,8 +220,10 @@ async function startAR() {
     updateStatus("Ready to place model. Tap screen to place.");
 
     console.log("✅ AR ready for interaction");
+    diagLog('AR session started');
   } catch (error) {
     console.error("❌ Failed to start AR:", error.message);
+    diagLog(`startAR error: ${error.message}`);
     alert(`AR not available: ${error.message}\n\nNote: WebXR requires a compatible mobile device with AR support (Android Chrome or iOS Safari 16+)`);
   }
 }
@@ -297,10 +315,18 @@ function handleTwoFingerGesture(event) {
 // ============================================================================
 function onXRFrame(time, frame) {
   // Early exit if no hit test source or no session
-  if (!appState.hitTestSource || !frame) return;
+  if (!frame) return;
 
   // Perform hit-testing to detect horizontal planes (tables)
-  const hitTestResults = frame.getHitTestResults(appState.hitTestSource);
+  let hitTestResults = [];
+  if (appState.hitTestSource) {
+    try {
+      hitTestResults = frame.getHitTestResults(appState.hitTestSource);
+    } catch (e) {
+      console.warn('getHitTestResults failed', e);
+      diagLog('getHitTestResults failed');
+    }
+  }
 
   // Place model on user tap
   if (
@@ -331,29 +357,39 @@ function placeModelOnPlane(hitResult, frame) {
     return;
   }
 
-  // Create an anchor at the hit location
-  // This anchor persists in real-world space and won't drift
-  frame
-    .createAnchor(pose.transform, appState.referenceSpace)
-    .then((anchor) => {
-      // Clone the model for this placement
-      const modelClone = appState.productModel.clone();
-      modelClone.visible = true;
+  // Try to create an anchor if supported; otherwise just attach model at the pose
+  const placeWithAnchor = async () => {
+    try {
+      if (typeof frame.createAnchor === 'function') {
+        const anchor = await frame.createAnchor(pose.transform, appState.referenceSpace);
+        const modelClone = appState.productModel.clone();
+        modelClone.visible = true;
+        anchor.userData = { model: modelClone };
+        appState.placedAnchors.push(anchor);
+        appState.scene.add(modelClone);
+        console.log('Model placed at anchor. Total placed:', appState.placedAnchors.length);
+        diagLog('Model placed with anchor');
+      } else {
+        // Anchor not available: create a regular Object3D and position it
+        const modelClone = appState.productModel.clone();
+        modelClone.visible = true;
+        modelClone.matrix.fromArray(pose.transform.matrix);
+        modelClone.matrix.decompose(modelClone.position, modelClone.quaternion, modelClone.scale);
+        modelClone.matrixAutoUpdate = false;
+        appState.scene.add(modelClone);
+        console.log('Model placed without anchor');
+        diagLog('Model placed without anchor');
+      }
 
-      // Associate the clone with this anchor
-      anchor.userData = { model: modelClone };
-      appState.placedAnchors.push(anchor);
-
-      // Add clone to scene
-      appState.scene.add(modelClone);
-
-      console.log("Model placed at anchor. Total placed:", appState.placedAnchors.length);
       appState.isPlacingMode = false;
-      updateStatus("Model placed! Tap 'Place Another' to add more.");
-    })
-    .catch((error) => {
-      console.error("Failed to create anchor:", error);
-    });
+      updateStatus('Model placed!');
+    } catch (err) {
+      console.error('Failed to place model:', err);
+      diagLog('Failed to place model: ' + err.message);
+    }
+  };
+
+  placeWithAnchor();
 }
 
 // ============================================================================
@@ -403,6 +439,67 @@ function resetAR() {
   gestureState.lastRotationY = 0;
 
   updateStatus("Ready to place model. Tap screen to place.");
+}
+
+// ============================================================================
+// Non-XR preview fallback for desktop/mobile browsers without device AR
+// Shows the model in the Three.js scene and enables simple touch/mouse controls
+// ============================================================================
+function enableNonXRPreview() {
+  diagLog('Enabling non-XR preview');
+  if (!appState.productModel) return;
+
+  // Make model visible and position it in front of camera
+  appState.productModel.visible = true;
+  appState.productModel.position.set(0, -0.3, -0.6);
+  appState.productModel.lookAt(new THREE.Vector3(0, 0, 0));
+
+  // Simple orbit-like controls: drag to rotate, pinch to scale
+  let isPointerDown = false;
+  let lastX = 0;
+  let lastY = 0;
+
+  appState.renderer.domElement.addEventListener('pointerdown', (e) => {
+    isPointerDown = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+  });
+
+  window.addEventListener('pointerup', () => (isPointerDown = false));
+
+  appState.renderer.domElement.addEventListener('pointermove', (e) => {
+    if (!isPointerDown) return;
+    const dx = (e.clientX - lastX) * 0.01;
+    const dy = (e.clientY - lastY) * 0.01;
+    appState.productModel.rotateY(dx);
+    appState.productModel.rotateX(dy);
+    lastX = e.clientX;
+    lastY = e.clientY;
+  });
+
+  // Touch pinch for scale
+  let pinchStart = 0;
+  appState.renderer.domElement.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[1].clientX - e.touches[0].clientX;
+      const dy = e.touches[1].clientY - e.touches[0].clientY;
+      pinchStart = Math.hypot(dx, dy);
+    }
+  });
+  appState.renderer.domElement.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 2 && pinchStart > 0) {
+      const dx = e.touches[1].clientX - e.touches[0].clientX;
+      const dy = e.touches[1].clientY - e.touches[0].clientY;
+      const d = Math.hypot(dx, dy);
+      const scale = THREE.MathUtils.clamp((d / pinchStart) * appState.productModel.scale.x, 0.3, 3);
+      appState.productModel.scale.setScalar(scale);
+    }
+  });
+
+  // Render loop for non-XR preview
+  appState.renderer.setAnimationLoop(() => {
+    appState.renderer.render(appState.scene, appState.camera);
+  });
 }
 
 // ============================================================================
@@ -474,7 +571,21 @@ function createDiagnosticsOverlay() {
     }
 
     diag.innerHTML = '<strong>Diagnostics</strong><br>' + parts.join('');
+    diagEl = diag;
   })();
+}
+
+function diagLog(msg) {
+  try {
+    console.log('DIAG:', msg);
+    if (diagEl) {
+      const p = document.createElement('div');
+      p.textContent = msg;
+      diagEl.appendChild(p);
+    }
+  } catch (e) {
+    console.warn('diagLog failed', e);
+  }
 }
 
 // ============================================================================
@@ -502,8 +613,21 @@ async function main() {
         startBtn.disabled = true;
         startBtn.textContent = "❌ WebXR Not Supported";
       }
+      // Fallback: show model in-screen for desktop users
+      enableNonXRPreview();
     } else {
       console.log("WebXR is available");
+      // Check whether immersive-ar is actually supported, otherwise fallback
+      try {
+        const supported = await navigator.xr.isSessionSupported('immersive-ar');
+        console.log('immersive-ar supported:', supported);
+        if (!supported) {
+          enableNonXRPreview();
+        }
+      } catch (e) {
+        console.warn('isSessionSupported call failed', e);
+        enableNonXRPreview();
+      }
     }
   } catch (error) {
     console.error("Failed to initialize app:", error);
