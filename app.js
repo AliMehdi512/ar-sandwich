@@ -22,6 +22,10 @@ const appState = {
   isPlacingMode: true, // Flag for placement mode
 };
 
+// Helper for debugging placement in AR: small visible box
+let placementHelper = null;
+let xrFirstFrameSeen = false;
+
 // Diagnostics element for mobile debugging
 let diagEl = null;
 
@@ -351,6 +355,11 @@ function onXRFrame(time, frame) {
   // Early exit if no hit test source or no session
   if (!frame) return;
 
+  if (!xrFirstFrameSeen) {
+    xrFirstFrameSeen = true;
+    diagLog('First XR frame received');
+  }
+
   // Perform hit-testing to detect horizontal planes (tables)
   let hitTestResults = [];
   if (appState.hitTestSource) {
@@ -432,6 +441,14 @@ function onXRFrame(time, frame) {
         appState.isPlacingMode = false;
         diagLog('Placed model using viewer-forward fallback');
         appState.placeRequested = false;
+        // show helper at viewer-forward placement
+        try {
+          const transform = new XRRigidTransform({x: pos.x, y: pos.y, z: pos.z});
+          showPlacementHelperFromPose(transform);
+        } catch (e) {
+          // fallback: create helper at position using Three.js directly
+          showPlacementHelperAtPosition(pos, orientation);
+        }
       }
     } catch (e) {
       console.warn('Viewer-forward placement failed', e);
@@ -469,6 +486,8 @@ function placeModelOnPlane(hitResult, frame) {
         appState.scene.add(modelClone);
         console.log('Model placed at anchor. Total placed:', appState.placedAnchors.length);
         diagLog('Model placed with anchor');
+        // show helper at anchor position
+        showPlacementHelperFromPose(pose.transform);
       } else {
         // Anchor not available: create a regular Object3D and position it
         const modelClone = appState.productModel.clone();
@@ -496,6 +515,7 @@ function placeModelOnPlane(hitResult, frame) {
         appState.scene.add(modelClone);
         console.log('Model placed without anchor');
         diagLog('Model placed without anchor');
+        showPlacementHelperFromPose(pose.transform);
       }
 
       appState.isPlacingMode = false;
@@ -556,6 +576,42 @@ function resetAR() {
   gestureState.lastRotationY = 0;
 
   updateStatus("Ready to place model. Tap screen to place.");
+}
+
+// ============================================================================
+// Placement helper utilities
+// ============================================================================
+function createPlacementHelper() {
+  if (placementHelper) return placementHelper;
+  const geo = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xff0000, opacity: 0.9, transparent: true });
+  placementHelper = new THREE.Mesh(geo, mat);
+  placementHelper.visible = false;
+  appState.scene.add(placementHelper);
+  return placementHelper;
+}
+
+function showPlacementHelperFromPose(transform) {
+  try {
+    const helper = createPlacementHelper();
+    // transform may be an XRTransform-like with position/orientation
+    const p = transform.position || { x: 0, y: 0, z: 0 };
+    const o = transform.orientation || { x: 0, y: 0, z: 0, w: 1 };
+    helper.position.set(p.x, p.y, p.z);
+    helper.quaternion.set(o.x, o.y, o.z, o.w);
+    helper.visible = true;
+    diagLog('Placement helper shown at pose');
+  } catch (e) {
+    console.warn('showPlacementHelperFromPose failed', e);
+  }
+}
+
+function showPlacementHelperAtPosition(pos, quaternion) {
+  const helper = createPlacementHelper();
+  helper.position.copy(pos);
+  if (quaternion) helper.quaternion.copy(quaternion);
+  helper.visible = true;
+  diagLog('Placement helper shown at position');
 }
 
 // ============================================================================
