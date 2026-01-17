@@ -345,6 +345,9 @@ function handleTwoFingerGesture(event) {
 // Main XR Frame Loop
 // ============================================================================
 function onXRFrame(time, frame) {
+  // Diagnostic throttling: only log detailed frame info occasionally
+  if (typeof onXRFrame._counter === 'undefined') onXRFrame._counter = 0;
+  onXRFrame._counter++;
   // Early exit if no hit test source or no session
   if (!frame) return;
 
@@ -356,6 +359,16 @@ function onXRFrame(time, frame) {
     } catch (e) {
       console.warn('getHitTestResults failed', e);
       diagLog('getHitTestResults failed');
+    }
+  }
+
+  // Occasionally log hit-test and viewerPose status for debugging
+  if (onXRFrame._counter % 60 === 0) {
+    try {
+      const viewerPose = frame.getViewerPose(appState.referenceSpace);
+      diagLog('Frame debug: hitTests=' + hitTestResults.length + ', viewerPose=' + (viewerPose ? 'ok' : 'null'));
+    } catch (e) {
+      diagLog('Frame debug: error getting viewerPose: ' + e.message);
     }
   }
 
@@ -398,6 +411,23 @@ function onXRFrame(time, frame) {
         modelClone.visible = true;
         modelClone.position.copy(pos);
         modelClone.quaternion.copy(orientation);
+        // Auto-scale for visibility
+        try {
+          const bbox = new THREE.Box3().setFromObject(modelClone);
+          const size = new THREE.Vector3();
+          bbox.getSize(size);
+          const maxDim = Math.max(size.x, size.y, size.z);
+          if (maxDim > 0) {
+            const desired = 0.25;
+            const scaleFactor = desired / maxDim;
+            if (scaleFactor > 0 && (scaleFactor < 0.8 || scaleFactor > 1.2)) {
+              modelClone.scale.multiplyScalar(scaleFactor);
+              diagLog('Auto-scaled model (viewer-forward) by ' + scaleFactor.toFixed(3));
+            }
+          }
+        } catch (e) {
+          console.warn('viewer-forward auto-scale failed', e);
+        }
         appState.scene.add(modelClone);
         appState.isPlacingMode = false;
         diagLog('Placed model using viewer-forward fallback');
@@ -445,7 +475,24 @@ function placeModelOnPlane(hitResult, frame) {
         modelClone.visible = true;
         modelClone.matrix.fromArray(pose.transform.matrix);
         modelClone.matrix.decompose(modelClone.position, modelClone.quaternion, modelClone.scale);
-        modelClone.matrixAutoUpdate = false;
+        modelClone.matrixAutoUpdate = true;
+        // Auto-scale heuristics: ensure model is reasonable size in meters
+        try {
+          const bbox = new THREE.Box3().setFromObject(modelClone);
+          const size = new THREE.Vector3();
+          bbox.getSize(size);
+          const maxDim = Math.max(size.x, size.y, size.z);
+          if (maxDim > 0) {
+            const desired = 0.25; // 25cm target
+            const scaleFactor = desired / maxDim;
+            if (scaleFactor > 0 && (scaleFactor < 0.8 || scaleFactor > 1.2)) {
+              modelClone.scale.multiplyScalar(scaleFactor);
+              diagLog('Auto-scaled model by ' + scaleFactor.toFixed(3));
+            }
+          }
+        } catch (e) {
+          console.warn('Auto-scale failed', e);
+        }
         appState.scene.add(modelClone);
         console.log('Model placed without anchor');
         diagLog('Model placed without anchor');
