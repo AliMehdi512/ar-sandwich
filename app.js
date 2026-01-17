@@ -72,6 +72,9 @@ async function initScene() {
   // Add a diagnostics overlay for mobile troubleshooting
   createDiagnosticsOverlay();
 
+  // Add camera test button for mobile troubleshooting
+  createCameraTestButton();
+
   // Handle window resize
   window.addEventListener("resize", onWindowResize);
 }
@@ -239,9 +242,15 @@ async function startAR() {
     console.log("✅ AR ready for interaction");
     diagLog('AR session started');
   } catch (error) {
-    console.error("❌ Failed to start AR:", error.message);
-    diagLog(`startAR error: ${error.message}`);
-    alert(`AR not available: ${error.message}\n\nNote: WebXR requires a compatible mobile device with AR support (Android Chrome or iOS Safari 16+)`);
+    console.error("❌ Failed to start AR:", error);
+    // Log full error details to diagnostics to help debugging
+    try {
+      diagLog('startAR error: ' + (error && error.name ? error.name + ': ' : '') + (error && error.message ? error.message : String(error)));
+      if (error && error.stack) diagLog(error.stack);
+    } catch (e) {
+      console.warn('diagLog error', e);
+    }
+    alert(`AR not available: ${error && error.message ? error.message : String(error)}\n\nNote: WebXR requires a compatible mobile device with AR support (Android Chrome or iOS Safari 16+)`);
   }
 }
 
@@ -629,6 +638,72 @@ function createDiagnosticsOverlay() {
     diag.innerHTML = '<strong>Diagnostics</strong><br>' + parts.join('');
     diagEl = diag;
   })();
+}
+
+// ============================================================================
+// Create Camera Test Button (calls getUserMedia) - helps determine camera permission
+// ============================================================================
+function createCameraTestButton() {
+  const btn = document.createElement('button');
+  btn.id = 'cameraTestBtn';
+  btn.textContent = 'Test Camera';
+  btn.style.position = 'absolute';
+  btn.style.left = '12px';
+  btn.style.bottom = '18px';
+  btn.style.zIndex = '9999';
+  btn.style.padding = '10px 14px';
+  btn.style.background = '#2f80ed';
+  btn.style.color = 'white';
+  btn.style.border = 'none';
+  btn.style.borderRadius = '8px';
+  btn.style.fontSize = '14px';
+  btn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.25)';
+  btn.addEventListener('click', testCamera);
+  document.body.appendChild(btn);
+}
+
+async function testCamera() {
+  diagLog('Starting getUserMedia camera test...');
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      diagLog('getUserMedia not supported in this browser');
+      alert('getUserMedia not supported in this browser');
+      return;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    diagLog('getUserMedia succeeded — camera accessible');
+
+    // Show a small video preview overlay so user can confirm camera works
+    let vid = document.getElementById('cameraTestVideo');
+    if (!vid) {
+      vid = document.createElement('video');
+      vid.id = 'cameraTestVideo';
+      vid.style.position = 'absolute';
+      vid.style.left = '12px';
+      vid.style.bottom = '70px';
+      vid.style.width = '120px';
+      vid.style.height = '90px';
+      vid.style.zIndex = '9999';
+      vid.style.borderRadius = '8px';
+      vid.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+      document.body.appendChild(vid);
+    }
+
+    vid.srcObject = stream;
+    vid.autoplay = true;
+    vid.playsInline = true;
+
+    // stop camera after 6 seconds to avoid leaving camera active
+    setTimeout(() => {
+      stream.getTracks().forEach((t) => t.stop());
+      if (vid && vid.parentNode) vid.parentNode.removeChild(vid);
+      diagLog('Camera test ended and stream stopped');
+    }, 6000);
+  } catch (err) {
+    diagLog('getUserMedia failed: ' + (err && err.message ? err.message : String(err)));
+    alert('Camera test failed: ' + (err && err.message ? err.message : String(err)));
+  }
 }
 
 function diagLog(msg) {
