@@ -231,6 +231,11 @@ async function startAR() {
       onXRFrame(time, frame)
     );
 
+    // Auto-request placement once session is running so user doesn't always need a second tap
+    // This will use hit-test if available or the viewer-forward fallback.
+    appState.placeRequested = true;
+    diagLog('Auto placement requested after session start');
+
     // Set up UI event listeners
     setupUIListeners();
 
