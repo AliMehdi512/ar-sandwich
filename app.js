@@ -234,6 +234,11 @@ async function startAR() {
     appState.renderer.setAnimationLoop((time, frame) =>
       onXRFrame(time, frame)
     );
+    diagLog('XR animation loop set');
+
+    // Retry placement after short delays in case first frames aren't ready yet
+    setTimeout(() => { appState.placeRequested = true; diagLog('Auto placement retry #1 requested'); }, 500);
+    setTimeout(() => { appState.placeRequested = true; diagLog('Auto placement retry #2 requested'); }, 2000);
 
     // Auto-request placement once session is running so user doesn't always need a second tap
     // This will use hit-test if available or the viewer-forward fallback.
@@ -355,6 +360,16 @@ function onXRFrame(time, frame) {
   // Early exit if no hit test source or no session
   if (!frame) return;
 
+  // If user requested placement, log current hit-test / viewer status for debugging
+  if (appState.placeRequested) {
+    try {
+      const viewerPose = frame.getViewerPose(appState.referenceSpace);
+      diagLog('Placement attempt: placeRequested=true, hitTestSource=' + (appState.hitTestSource ? 'yes' : 'no') + ', viewerPose=' + (viewerPose ? 'ok' : 'null'));
+    } catch (e) {
+      diagLog('Placement attempt: error reading viewerPose: ' + e.message);
+    }
+  }
+
   if (!xrFirstFrameSeen) {
     xrFirstFrameSeen = true;
     diagLog('First XR frame received');
@@ -369,6 +384,11 @@ function onXRFrame(time, frame) {
       console.warn('getHitTestResults failed', e);
       diagLog('getHitTestResults failed');
     }
+  }
+
+  // Log immediate hitTestResults if a placement was requested
+  if (appState.placeRequested) {
+    diagLog('hitTestResults length=' + hitTestResults.length);
   }
 
   // Occasionally log hit-test and viewerPose status for debugging
